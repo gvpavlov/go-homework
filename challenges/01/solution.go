@@ -1,48 +1,51 @@
 package main
 
-import "fmt"
 
-type PubSub struct {
-	readers []chan string
-	writer  chan string
-}
-
-func (ps *PubSub) read() {
-	for msg := range ps.writer {
-		for _, reader := range ps.readers {
-			go func(reader chan string, msg string) {
-				reader <- msg
-			}(reader, msg)
-		}
-	}
-}
-
+// NewPubSub returns an initialized PubSub
 func NewPubSub() *PubSub {
-	ps := &PubSub{}
-	ps.writer = make(chan string)
-	go ps.read()
-	return ps
+	p := new(PubSub)
+	p.input = make(chan string)
+	p.subscribers = make([]chan string, 0)
+	p.slock = make(chan struct{}, 1)
+	go p.broadcast()
+	return p
 }
 
-func (ps *PubSub) Subscribe() chan string {
-	c := make(chan string)
-	ps.readers = append(ps.readers, c)
-	return c
+// PubSub is used to broadcast messages to multiple subscribers
+type PubSub struct {
+	input       chan string
+	subscribers []chan string
+	slock       chan struct{}
 }
 
-func (ps *PubSub) Publish() chan string {
-	return ps.writer
+// Subscribe creates and returns a new subscriber channel
+func (b *PubSub) Subscribe() <-chan string {
+	member := make(chan string)
+	b.lock()
+	b.subscribers = append(b.subscribers, member)
+	b.unlock()
+	return member
 }
 
-func main() {
-	ps := NewPubSub()
-	a := ps.Subscribe()
-	b := ps.Subscribe()
-	c := ps.Subscribe()
-	go func() {
-		ps.Publish() <- "wat"
-		ps.Publish() <- ("wat" + <-c)
-	}()
-	fmt.Printf("A recieved %s, B recieved %s and we ignore C!\n", <-a, <-b)
-	fmt.Printf("A recieved %s, B recieved %s and C received %s\n", <-a, <-b, <-c)
+// Publish sends a message to all registered subscribers
+func (b *PubSub) Publish() chan<- string {
+	return b.input
+}
+
+func (b *PubSub) lock() {
+	b.slock <- struct{}{}
+}
+
+func (b *PubSub) unlock() {
+	<-b.slock
+}
+
+func (b *PubSub) broadcast() {
+	for message := range b.input {
+		b.lock()
+		for _, member := range b.subscribers {
+			member <- message
+		}
+		b.unlock()
+	}
 }
